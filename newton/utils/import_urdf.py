@@ -118,6 +118,7 @@ def parse_urdf(
             is_visible=visible,
             has_ground_collision=not just_visual,
             has_shape_collision=not just_visual,
+            has_particle_collision=not just_visual,
         )
         shapes = []
         # add geometry
@@ -455,8 +456,8 @@ def parse_urdf(
             # we skipped the insertion of the child body
             continue
 
-        lower = joint["limit_lower"]
-        upper = joint["limit_upper"]
+        lower = joint.get("limit_lower", None)
+        upper = joint.get("limit_upper", None)
         joint_damping = joint["damping"]
 
         parent_xform = joint["origin"]
