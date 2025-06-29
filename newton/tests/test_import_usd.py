@@ -16,6 +16,7 @@
 import os
 import unittest
 
+import numpy as np
 import warp as wp
 
 import newton
@@ -41,7 +42,6 @@ class TestImportUsd(unittest.TestCase):
         self.assertEqual(builder.joint_count, 9)
         self.assertEqual(builder.joint_dof_count, 14)
         self.assertEqual(builder.joint_coord_count, 15)
-        self.assertEqual(builder.joint_axis_count, 8)
         self.assertEqual(builder.joint_type, [newton.JOINT_FREE] + [newton.JOINT_REVOLUTE] * 8)
         self.assertEqual(len(results["path_body_map"]), 9)
         self.assertEqual(len(results["path_shape_map"]), 13)
@@ -125,6 +125,35 @@ class TestImportUsd(unittest.TestCase):
         joint_key_cloning = [k for k in builder_cloning.joint_key if k.startswith("/World")]
         joint_key_no_cloning = [k for k in builder_no_cloning.joint_key if k.startswith("/World")]
         self.assertEqual(joint_key_cloning, joint_key_no_cloning)
+
+    @unittest.skipUnless(USD_AVAILABLE, "Requires usd-core")
+    def test_mass_calculations(self):
+        builder = newton.ModelBuilder()
+
+        _ = parse_usd(
+            os.path.join(os.path.dirname(__file__), "assets", "ant.usda"),
+            builder,
+            collapse_fixed_joints=True,
+        )
+
+        np.testing.assert_allclose(
+            np.array(builder.body_mass),
+            np.array(
+                [
+                    0.09677605,
+                    0.00783155,
+                    0.01351844,
+                    0.00783155,
+                    0.01351844,
+                    0.00783155,
+                    0.01351844,
+                    0.00783155,
+                    0.01351844,
+                ]
+            ),
+            rtol=1e-5,
+            atol=1e-7,
+        )
 
 
 if __name__ == "__main__":

@@ -26,11 +26,9 @@ import torch
 import warp as wp
 
 import newton
-import newton.collision
-import newton.core.articulation
 import newton.examples
 import newton.utils
-from newton.core import Control, State
+from newton.sim import Control, State
 
 
 @wp.kernel
@@ -100,28 +98,26 @@ def apply_joint_position_pd_control(
     Kd: wp.float32,
     joint_q_start: wp.array(dtype=wp.int32),
     joint_qd_start: wp.array(dtype=wp.int32),
-    joint_axis_dim: wp.array(dtype=wp.int32, ndim=2),
-    joint_axis_start: wp.array(dtype=wp.int32),
+    joint_dof_dim: wp.array(dtype=wp.int32, ndim=2),
     # outputs
     joint_f: wp.array(dtype=wp.float32),
 ):
     joint_id = wp.tid()
-    ai = joint_axis_start[joint_id]
+    if joint_id == 0:
+        return  # skip the free joint
     qi = joint_q_start[joint_id]
     qdi = joint_qd_start[joint_id]
-    dim = joint_axis_dim[joint_id, 0] + joint_axis_dim[joint_id, 1]
+    dim = joint_dof_dim[joint_id, 0] + joint_dof_dim[joint_id, 1]
     for j in range(dim):
         qj = qi + j
         qdj = qdi + j
-        aj = ai + j
         q = joint_q[qj]
         qd = joint_qd[qdj]
 
-        tq = wp.clamp(actions[aj], -1.0, 1.0) * action_scale + default_joint_q[qj]
+        tq = wp.clamp(actions[qdj - 6], -1.0, 1.0) * action_scale + default_joint_q[qj]
         tq = Kp * (tq - q) - Kd * qd
 
-        # skip the 6 dofs of the free joint
-        joint_f[6 + aj] = tq
+        joint_f[qdj] = tq
 
 
 class AnymalController:
@@ -208,8 +204,7 @@ class AnymalController:
                 self.Kd,
                 self.model.joint_q_start,
                 self.model.joint_qd_start,
-                self.model.joint_axis_dim,
-                self.model.joint_axis_start,
+                self.model.joint_dof_dim,
             ],
             outputs=[
                 control.joint_f,
@@ -233,12 +228,10 @@ class Example:
             limit_ke=1.0e3,
             limit_kd=1.0e1,
         )
-        builder.default_shape_cfg = newton.ModelBuilder.ShapeConfig(
-            ke=2.0e3,
-            kd=5.0e2,
-            kf=1.0e2,
-            mu=0.75,
-        )
+        builder.default_shape_cfg.ke = 5.0e4
+        builder.default_shape_cfg.kd = 5.0e2
+        builder.default_shape_cfg.kf = 1.0e3
+        builder.default_shape_cfg.mu = 0.75
 
         asset_path = newton.utils.download_asset("anymal_c_simple_description")
 
@@ -250,6 +243,7 @@ class Example:
             collapse_fixed_joints=True,
             ignore_inertial_definitions=False,
         )
+        builder.add_ground_plane()
 
         self.sim_time = 0.0
         self.sim_step = 0
@@ -306,15 +300,14 @@ class Example:
         self.model.body_mass = wp.array([27.99286, 2.51203, 3.27327, 0.55505, 2.51203, 3.27327, 0.55505, 2.51203, 3.27327, 0.55505, 2.51203, 3.27327, 0.55505], dtype=wp.float32,)
         # fmt: on
 
-        self.model.ground = True
-
         self.solver = newton.solvers.FeatherstoneSolver(self.model)
         self.renderer = newton.utils.SimRendererOpenGL(self.model, stage_path)
 
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()
         self.control = self.model.control()
-        newton.core.articulation.eval_fk(self.model, self.state_0.joint_q, self.state_0.joint_qd, self.state_0)
+        self.contacts = self.model.collide(self.state_0, rigid_contact_margin=0.1)
+        newton.sim.eval_fk(self.model, self.state_0.joint_q, self.state_0.joint_qd, self.state_0)
 
         self.controller = AnymalController(self.model, self.device)
 
@@ -327,10 +320,10 @@ class Example:
             self.graph = None
 
     def simulate(self):
+        self.contacts = self.model.collide(self.state_0, rigid_contact_margin=0.1)
         for _ in range(self.sim_substeps):
             self.state_0.clear_forces()
-            newton.collision.collide(self.model, self.state_0)
-            self.solver.step(self.model, self.state_0, self.state_1, self.control, None, self.sim_dt)
+            self.solver.step(self.model, self.state_0, self.state_1, self.control, self.contacts, self.sim_dt)
             self.state_0, self.state_1 = self.state_1, self.state_0
 
     def step(self):
